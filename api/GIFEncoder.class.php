@@ -1,282 +1,233 @@
 <?php
-
-/*
-:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-:: Formerly known as:::
-:: GIFEncoder Version 2.0 by László Zsidi, http://gifs.hu
-::
-:: This class is a rewritten 'GifMerge.class.php' version.
-::
-:: Modification:
-:: - Simplified and easy code,
-:: - Ultra fast encoding,
-:: - Built-in errors,
-:: - Stable working
-::
-::
-:: Updated at 2007. 02. 13. '00.05.AM'
-::
-::
-::
-:: Try on-line GIFBuilder Form demo based on GIFEncoder.
-::
-:: http://gifs.hu/phpclasses/demos/GifBuilder/
-::
-:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
- */
-
 /**
- * Encode animated gifs
+ * AnimatedGif – minimal PHP-8–compatible fork of “GIFEncoder v2.0”
+ * Original author: László Zsidi – http://gifs.hu
+ * PHP-8 patch: 2025-07-07
  */
 class AnimatedGif
 {
+    /** @var string  the final GIF binary */
+    private $image = '';
 
-/**
- * The built gif image
- * @var resource
- */
-  private $image = '';
+    /** @var array<string>  binary source frames */
+    private $buffer = [];
 
-/**
- * The array of images to stack
- * @var array
- */
-  private $buffer = array();
+    /** @var int  how many times to loop (0 = infinite) */
+    private $number_of_loops = 0;
 
-/**
- * How many times to loop? 0 = infinite
- * @var int
- */
-  private $number_of_loops = 0;
+    /** @var int  disposal method */
+    private $DIS = 2;
 
-/**
- *
- * @var int
- */
-  private $DIS = 2;
+    /** @var int  packed RGB value of the transparent colour or –1 */
+    private $transparent_colour = -1;
 
-/**
- * Which colour is transparent
- * @var int
- */
-  private $transparent_colour = -1;
+    /** @var bool  is this the first frame? */
+    private $first_frame = true;
 
-/**
- * Is this the first frame
- * @var int
- */
-  private $first_frame = true;
+    /**
+     * @param array<string> $source_images  raw GIF binaries
+     * @param array<int>    $image_delays   delay for each frame ( 1/100 s )
+     * @param int           $number_of_loops
+     * @param int           $transparent_colour_red
+     * @param int           $transparent_colour_green
+     * @param int           $transparent_colour_blue
+     * @throws \Exception
+     */
+    public function __construct(
+        array $source_images,
+        array $image_delays,
+        int   $number_of_loops,
+        int   $transparent_colour_red   = -1,
+        int   $transparent_colour_green = -1,
+        int   $transparent_colour_blue  = -1
+    ) {
+        // (The transparent-colour parameters were unused in the 2007 code.
+        //  Keeping them for API compatibility.)
+        $transparent_colour_red   = 0;
+        $transparent_colour_green = 0;
+        $transparent_colour_blue  = 0;
 
-/**
- * Encode an animated gif
- * @param array $source_images An array of binary source images
- * @param array $image_delays The delays associated with the source images
- * @param type $number_of_loops The number of times to loop
- * @param int $transparent_colour_red
- * @param int $transparent_colour_green
- * @param int $transparent_colour_blue
- */
-  public function __construct(array $source_images, array $image_delays, $number_of_loops, $transparent_colour_red = -1, $transparent_colour_green = -1, $transparent_colour_blue = -1)
-  {
-/**
- * I have no idea what these even do, they appear to do nothing to the image so far
- */
-    $transparent_colour_red = 0;
-    $transparent_colour_green = 0;
-    $transparent_colour_blue = 0;
+        $this->number_of_loops = max(0, $number_of_loops);
+        $this->set_transparent_colour(
+            $transparent_colour_red,
+            $transparent_colour_green,
+            $transparent_colour_blue
+        );
 
-    $this->number_of_loops = ($number_of_loops > -1) ? $number_of_loops : 0;
-    $this->set_transparent_colour($transparent_colour_red, $transparent_colour_green, $transparent_colour_blue);
-    $this->buffer_images($source_images);
+        $this->buffer_images($source_images);
 
-    $this->addHeader();
-    for ($i = 0; $i < count($this->buffer); $i++) {
-      $this->addFrame($i, $image_delays[$i]);
-    }
-  }
-/**
- * Set the transparent colour
- * @param int $red
- * @param int $green
- * @param int $blue
- */
-  private function set_transparent_colour($red, $green, $blue)
-  {
-    $this->transparent_colour = ($red > -1 && $green > -1 && $blue > -1) ?
-    ($red | ($green << 8) | ($blue << 16)) : -1;
-  }
-
-/**
- * Buffer the images and check to make sure they are vaild
- * @param array $source_images the array of source images
- * @throws Exception
- */
-  private function buffer_images($source_images)
-  {
-    for ($i = 0; $i < count($source_images); $i++) {
-      $this->buffer[] = $source_images[$i];
-      if (substr($this->buffer[$i], 0, 6) != "GIF87a" && substr($this->buffer[$i], 0, 6) != "GIF89a") {
-        throw new Exception('Image at position ' . $i . ' is not a gif');
-      }
-      for ($j = (13 + 3 * (2 << (ord($this->buffer[$i]{10}) & 0x07))), $k = true; $k; $j++) {
-        switch ($this->buffer[$i]{ $j}) {
-        case "!":
-          if ((substr($this->buffer[$i], ($j + 3), 8)) == "NETSCAPE") {
-            throw new Exception('You cannot make an animation from an animated gif.');
-          }
-          break;
-        case ";":
-          $k = false;
-          break;
+        $this->addHeader();
+        for ($i = 0; $i < count($this->buffer); $i++) {
+            $this->addFrame($i, $image_delays[$i]);
         }
-      }
+        $this->addFooter(); // append the terminator once construction is done
     }
-  }
 
-/**
- * Add the gif header to the image
- */
-  private function addHeader()
-  {
-    $cmap = 0;
-    $this->image = 'GIF89a';
-    if (ord($this->buffer[0]{10}) & 0x80) {
-      $cmap = 3 * (2 << (ord($this->buffer[0]{10}) & 0x07));
-      $this->image .= substr($this->buffer[0], 6, 7);
-      $this->image .= substr($this->buffer[0], 13, $cmap);
-      $this->image .= "!\377\13NETSCAPE2.0\3\1" . $this->word($this->number_of_loops) . "\0";
+    /** Set the transparent colour */
+    private function set_transparent_colour(int $r, int $g, int $b): void
+    {
+        $this->transparent_colour =
+            ($r > -1 && $g > -1 && $b > -1) ? ($r | ($g << 8) | ($b << 16)) : -1;
     }
-  }
 
-/**
- * Add a frame to the animation
- * @param int $frame The frame to be added
- * @param int $delay The delay associated with the frame
- */
-  private function addFrame($frame, $delay)
-  {
-    $Locals_str = 13 + 3 * (2 << (ord($this->buffer[$frame]{10}) & 0x07));
+    /** Validate and stash the source frames */
+    private function buffer_images(array $source_images): void
+    {
+        foreach ($source_images as $i => $gif) {
+            $this->buffer[] = $gif;
+            if (!in_array(substr($gif, 0, 6), ['GIF87a', 'GIF89a'], true)) {
+                throw new \Exception("Image #$i is not a GIF.");
+            }
 
-    $Locals_end = strlen($this->buffer[$frame]) - $Locals_str - 1;
-    $Locals_tmp = substr($this->buffer[$frame], $Locals_str, $Locals_end);
+            // Reject already-animated GIFs (they contain a NETSCAPE extension)
+            for (
+                $j = 13 + 3 * (2 << (ord($gif[10]) & 0x07)), $keep_scanning = true;
+                $keep_scanning;
+                $j++
+            ) {
+                switch ($gif[$j]) {
+                    case '!':
+                        if (substr($gif, $j + 3, 8) === 'NETSCAPE') {
+                            throw new \Exception(
+                                'Cannot build an animation from an already animated GIF.'
+                            );
+                        }
+                        break;
+                    case ';':
+                        $keep_scanning = false;
+                        break;
+                }
+            }
+        }
+    }
 
-    $Global_len = 2 << (ord($this->buffer[0]{10}) & 0x07);
-    $Locals_len = 2 << (ord($this->buffer[$frame]{10}) & 0x07);
+    /** Write the logical-screen descriptor and global colour table (frame 0) */
+    private function addHeader(): void
+    {
+        $this->image = 'GIF89a';
+        if (ord($this->buffer[0][10]) & 0x80) {                           // GCT present?
+            $cmap = 3 * (2 << (ord($this->buffer[0][10]) & 0x07));        // gct size
+            $this->image .= substr($this->buffer[0], 6, 7);               // LSD
+            $this->image .= substr($this->buffer[0], 13, $cmap);          // GCT
+            // Netscape application-extension – repeat X times
+            $this->image .= "!\xFF\x0BNETSCAPE2.0\x03\x01"
+                . $this->word($this->number_of_loops) . "\0";
+        }
+    }
 
-    $Global_rgb = substr($this->buffer[0], 13, 3 * (2 << (ord($this->buffer[0]{10}) & 0x07)));
-    $Locals_rgb = substr($this->buffer[$frame], 13, 3 * (2 << (ord($this->buffer[$frame]{10}) & 0x07)));
+    /** Insert one frame and its graphics-control extension */
+    private function addFrame(int $frame, int $delay): void
+    {
+        // Where does the image descriptor of this frame start?
+        $locals_str = 13 + 3 * (2 << (ord($this->buffer[$frame][10]) & 0x07));
 
-    $Locals_ext = "!\xF9\x04" . chr(($this->DIS << 2) + 0) .
-    chr(($delay >> 0) & 0xFF) . chr(($delay >> 8) & 0xFF) . "\x0\x0";
+        $locals_end = strlen($this->buffer[$frame]) - $locals_str - 1;
+        $locals_tmp = substr($this->buffer[$frame], $locals_str, $locals_end);
 
-    if ($this->transparent_colour > -1 && ord($this->buffer[$frame]{10}) & 0x80) {
-      for ($j = 0; $j < (2 << (ord($this->buffer[$frame]{10}) & 0x07)); $j++) {
+        $global_len  = 2 << (ord($this->buffer[0][10]) & 0x07);
+        $locals_len  = 2 << (ord($this->buffer[$frame][10]) & 0x07);
+
+        $global_rgb  = substr($this->buffer[0],        13, 3 * $global_len);
+        $locals_rgb  = substr($this->buffer[$frame],   13, 3 * $locals_len);
+
+        $locals_ext  = "!\xF9\x04" . chr(($this->DIS << 2))
+            . chr($delay & 0xFF) . chr(($delay >> 8) & 0xFF) . "\x0\x0";
+
+        /* Transparency sniff */
         if (
-          ord($Locals_rgb{3 * $j + 0}) == (($this->transparent_colour >> 16) & 0xFF) &&
-          ord($Locals_rgb{3 * $j + 1}) == (($this->transparent_colour >> 8) & 0xFF) &&
-          ord($Locals_rgb{3 * $j + 2}) == (($this->transparent_colour >> 0) & 0xFF)
+            $this->transparent_colour > -1
+            && (ord($this->buffer[$frame][10]) & 0x80)
         ) {
-          $Locals_ext = "!\xF9\x04" . chr(($this->DIS << 2) + 1) .
-          chr(($delay >> 0) & 0xFF) . chr(($delay >> 8) & 0xFF) . chr($j) . "\x0";
-          break;
+            for ($j = 0; $j < $locals_len; $j++) {
+                if (
+                    ord($locals_rgb[3 * $j + 0]) === (($this->transparent_colour >> 16) & 0xFF)
+                    && ord($locals_rgb[3 * $j + 1]) === (($this->transparent_colour >> 8) & 0xFF)
+                    && ord($locals_rgb[3 * $j + 2]) === (($this->transparent_colour) & 0xFF)
+                ) {
+                    $locals_ext = "!\xF9\x04" . chr(($this->DIS << 2) + 1)
+                        . chr($delay & 0xFF) . chr(($delay >> 8) & 0xFF)
+                        . chr($j) . "\x0";
+                    break;
+                }
+            }
         }
-      }
-    }
-    switch ($Locals_tmp{0}) {
-    case "!":
-      $Locals_img = substr($Locals_tmp, 8, 10);
-      $Locals_tmp = substr($Locals_tmp, 18, strlen($Locals_tmp) - 18);
-      break;
-    case ",":
-      $Locals_img = substr($Locals_tmp, 0, 10);
-      $Locals_tmp = substr($Locals_tmp, 10, strlen($Locals_tmp) - 10);
-      break;
-    }
-    if (ord($this->buffer[$frame]{10}) & 0x80 && $this->first_frame === false) {
-      if ($Global_len == $Locals_len) {
-        if ($this->blockCompare($Global_rgb, $Locals_rgb, $Global_len)) {
-          $this->image .= ($Locals_ext . $Locals_img . $Locals_tmp);
+
+        /* Extract the image descriptor + lzw data */
+        switch ($locals_tmp[0]) {
+            case '!': // graphic-control block in source
+                $locals_img = substr($locals_tmp, 8, 10);
+                $locals_tmp = substr($locals_tmp, 18);
+                break;
+            case ',': // image-descriptor starts immediately
+                $locals_img = substr($locals_tmp, 0, 10);
+                $locals_tmp = substr($locals_tmp, 10);
+                break;
+            default:
+                $locals_img = '';
+        }
+
+        /* Decide whether to re-emit a colour table */
+        if (
+            (ord($this->buffer[$frame][10]) & 0x80)   // local colour table present
+            && $this->first_frame === false
+        ) {
+            if ($global_len === $locals_len && $this->blockCompare($global_rgb, $locals_rgb, $global_len)) {
+                // identical to global table – omit it
+                $this->image .= $locals_ext . $locals_img . $locals_tmp;
+            } else {
+                // different size or colours – include the LCT
+                $byte = ord($locals_img[9]);
+                $byte |= 0x80;         // set “LCT present”
+                $byte &= 0xF8;         // clear size bits
+                $byte |= (ord($this->buffer[0][10]) & 0x07); // size of GCT
+                $locals_img[9] = chr($byte);
+                $this->image .= $locals_ext . $locals_img . $locals_rgb . $locals_tmp;
+            }
         } else {
-          $byte = ord($Locals_img{9});
-          $byte |= 0x80;
-          $byte &= 0xF8;
-          $byte |= (ord($this->buffer[0]{10}) & 0x07);
-          $Locals_img{9} = chr($byte);
-          $this->image .= ($Locals_ext . $Locals_img . $Locals_rgb . $Locals_tmp);
+            // reuse global colour table
+            $this->image .= $locals_ext . $locals_img . $locals_tmp;
         }
-      } else {
-        $byte = ord($Locals_img{9});
-        $byte |= 0x80;
-        $byte &= 0xF8;
-        $byte |= (ord($this->buffer[$frame]{10}) & 0x07);
-        $Locals_img{9} = chr($byte);
-        $this->image .= ($Locals_ext . $Locals_img . $Locals_rgb . $Locals_tmp);
-      }
-    } else {
-      $this->image .= ($Locals_ext . $Locals_img . $Locals_tmp);
-    }
-    $this->first_frame = false;
-  }
 
-/**
- * Add the gif footer
- */
-  private function addFooter()
-  {
-    $this->image .= ";";
-  }
-
-/**
- * Compare gif blocks? What is a block?
- * @param type $GlobalBlock
- * @param type $LocalBlock
- * @param type $Len
- * @return type
- */
-  private function blockCompare($GlobalBlock, $LocalBlock, $Len)
-  {
-    for ($i = 0; $i < $Len; $i++) {
-      if (
-        $GlobalBlock{3 * $i + 0} != $LocalBlock{3 * $i + 0} ||
-        $GlobalBlock{3 * $i + 1} != $LocalBlock{3 * $i + 1} ||
-        $GlobalBlock{3 * $i + 2} != $LocalBlock{3 * $i + 2}
-      ) {
-        return (0);
-      }
+        $this->first_frame = false;
     }
 
-    return (1);
-  }
+    /** GIF trailer */
+    private function addFooter(): void
+    {
+        $this->image .= ';';
+    }
 
-/**
- * No clue
- * @param int $int
- * @return string the char you meant?
- */
-  private function word($int)
-  {
-    return (chr($int & 0xFF) . chr(($int >> 8) & 0xFF));
-  }
+    /** Compare two colour-tables byte-for-byte */
+    private function blockCompare(string $g, string $l, int $len): bool
+    {
+        for ($i = 0; $i < $len; $i++) {
+            if (
+                $g[3 * $i + 0] !== $l[3 * $i + 0] ||
+                $g[3 * $i + 1] !== $l[3 * $i + 1] ||
+                $g[3 * $i + 2] !== $l[3 * $i + 2]
+            ) {
+                return false;
+            }
+        }
+        return true;
+    }
 
-/**
- * Return the animated gif
- * @return type
- */
-  public function getAnimation()
-  {
-    return $this->image;
-  }
+    /** Convert an int to little-endian 16-bit word */
+    private function word(int $v): string
+    {
+        return chr($v & 0xFF) . chr(($v >> 8) & 0xFF);
+    }
 
-/**
- * Return the animated gif
- * @return type
- */
-  public function display()
-  {
-//late footer add
-    $this->addFooter();
-    header('Content-type:image/jpg');
-    echo $this->image;
-  }
+    /** Get the finished animation binary */
+    public function getAnimation(): string
+    {
+        return $this->image;
+    }
 
+    /** Output directly with the proper header */
+    public function display(): void
+    {
+        header('Content-Type: image/gif');
+        echo $this->image;
+    }
 }
